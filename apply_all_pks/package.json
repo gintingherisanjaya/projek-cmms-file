@@ -1,0 +1,15 @@
+{
+  "name": "apply-v2-draft-changes-bundle",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@inquirer/prompts": "^8.2.0",
+    "exceljs": "^4.4.0",
+    "googleapis": "^170.1.0",
+    "open": "^11.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "scripts": {
+    "apply-v2-draft": "node scripts/drive/apply-v2-draft-changes-json-to-xlsx.js"
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "strictMode": true,
+  "requireScopedDescriptionRules": false,
+  "descriptionReplacements": {
+    "SCRAPPER": "SCRAPER",
+    "COMPPRESSOR": "COMPRESSOR",
+    "TRANSPORTPNEUMATIC": "TRANSPORT PNEUMATIC",
+    "GENERATORDIESEL": "GENERATOR DIESEL",
+    "GEARMOTORINCLINED": "GEARMOTOR INCLINED",
+    "BODYSHELL": "BODY SHELL",
+    "ACCESSORIESTOP": "ACCESSORIES TOP",
+    "CHAIN/WIRE ROPE HOISTING CRANE": "CHAIN/WIRE ROPE AND DRUM HOISTING CRANE",
+    "DIGESTERNO": "DIGESTER NO",
+    "DIGESTER LNO": "DIGESTER LINE-I NO",
+    "COUPLING DIGESTER LINE-I NO": "COUPLING DIGESTER NO",
+    "ACCESSORIES DIGESTER LINE-I NO": "ACCESSORIES DIGESTER NO",
+    "CRUCHER": "CRUSHER",
+    "CANTILVER": "CANTILEVER"
+  },
+  "scopedDescriptionRules": [
+    {
+      "id": "recycling-line-no",
+      "parentPrefix": "PALM-2F01-0005-0006-",
+      "parentDescContains": "RECYCLING CONVEYOR",
+      "childSuffix": "0003",
+      "find": "ACCESSORIES RECYCLING CONVEYOR NO",
+      "replace": "ACCESSORIES RECYCLING CONVEYOR LINE NO"
+    },
+    {
+      "id": "water-clarifier-panel-pump",
+      "parentPrefix": "PALM-2F01-0005-0010-",
+      "parentDescContains": "WATER CLARIFIER TANK",
+      "childSuffix": "0006",
+      "find": "PANEL WATER CLARIFIER TANK NO",
+      "replace": "PANEL PUMP WATER CLARIFIER TANK NO"
+    },
+    {
+      "id": "water-basin-panel-pump",
+      "parentPrefix": "PALM-2F01-0005-0010-",
+      "parentDescContains": "WATER BASIN (BAK SEDIMENTASI)",
+      "childSuffix": "0005",
+      "find": "PANEL WATER BASIN (BAK SEDIMENTASI) NO",
+      "replace": "PANEL PUMP WATER BASIN (BAK SEDIMENTASI) NO"
+    },
+    {
+      "id": "cake-breaker-body-and-screw-win",
+      "parentPrefix": "PALM-2F01-0005-0008-",
+      "parentDescContains": "CAKE BREAKER CONVEYOR",
+      "childSuffix": "0001",
+      "find": "SCREW CAKE BREAKER CONVEYOR",
+      "replace": "BODY AND SCREW CAKE BREAKER CONVEYOR",
+      "skipIfContains": "BODY AND SCREW CAKE BREAKER CONVEYOR"
+    }
+  ],
+  "specialNormalizationRules": [
+    {
+      "id": "inject-bollard-parent-marker",
+      "type": "inject_parent_marker_if_missing",
+      "parentDescContains": "BOLLARD",
+      "extractParentMarkerRegex": "\\bBOLLARD\\s+(FFB|SFB)\\b",
+      "targetRegex": "\\bSTRUCTURE\\s+BOLLARD\\b(?!\\s+(FFB|SFB)\\b)",
+      "replaceTemplate": "STRUCTURE BOLLARD {marker}"
+    }
+  ],
+  "specialAdaptationRules": [
+    {
+      "id": "sludge-drain-panel-no-follows-parent",
+      "type": "replace_no_with_loser_parent_no",
+      "parentDescContains": "SLUDGE DRAIN TANK",
+      "targetRegex": "\\b(PANEL\\s+SLUDGE\\s+DRAIN\\s+PUMP\\s+NO\\.?\\s*)\\d+\\b"
+    },
+    {
+      "id": "sludge-oil-recovery-pump-no-follows-parent",
+      "type": "replace_no_with_loser_parent_no",
+      "parentDescContains": "SLUDGE OIL RECOVERY TANK",
+      "targetRegex": "\\b((?:PANEL\\s+)?SLUDGE\\s+OIL\\s+RECOVERY\\s+PUMP\\s+NO\\.?\\s*)\\d+\\b"
+    }
+  ],
+  "funcLocReplacements": {
+    "PALM-2F01-0005-0004-0005-0005": "PALM-2F01-0005-0004-0005-0003",
+    "PALM-2F01-0005-0007-0110-0005": "PALM-2F01-0005-0007-0109-0005",
+    "PALM-2F01-0005-0007-0110-0005-0001": "PALM-2F01-0005-0007-0109-0005-0001",
+    "PALM-2F01-0005-0007-0110-0005-0002": "PALM-2F01-0005-0007-0109-0005-0002",
+    "PALM-2F01-0005-0007-0110-0006": "PALM-2F01-0005-0007-0109-0006"
+  }
+}

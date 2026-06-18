@@ -1,0 +1,26 @@
+node_modules/
+csv_cache/
+arsip/
+excel_download/
+Output/
+to-delete/
+
+# Credentials (local only)
+token.json
+oauth.json
+
+# Large / local Excel data (files stay on disk; not committed)
+*.xlsx
+!template_*.xlsx
+
+# Local JSON data / run outputs
+truth.json
+unavailable.json
+evaluate.json
+column.json
+validation.xlsx
+peralatan_dengan_jam_notif_overhaul.json
+master-data-draft-mapping*.json
+
+# Local reference data under utils
+utils/source-funcloc.xlsx
