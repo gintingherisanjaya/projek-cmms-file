@@ -17,6 +17,7 @@
     "lsmw-group-result-checking": "node lsmw_group_result_checking.cjs",
     "check-equipment-loss": "node check-equipment-loss.cjs",
     "equipment-gathering": "node equipment-gathering.cjs",
+    "gathering-investasi-lpp": "node gathering-investasi-lpp.cjs",
     "apply-equipment-gathering-to-last-result": "node apply-equipment-gathering-to-last-result.cjs",
     "lsmw-measuring-point": "node lsmw_measuring_point.cjs",
     "lsmw-measuring-document": "node lsmw_measuring_document.cjs",
