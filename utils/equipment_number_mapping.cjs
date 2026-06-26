@@ -31,6 +31,14 @@ function findHeaderIndex(headerRow, expectedName) {
     return -1;
 }
 
+function findFirstHeaderIndex(headerRow, expectedNames) {
+    for (const name of expectedNames) {
+        const idx = findHeaderIndex(headerRow, name);
+        if (idx >= 0) return idx;
+    }
+    return -1;
+}
+
 function normalizeFuncLocForCompare(value) {
     return String(value ?? "").trim().toUpperCase();
 }
@@ -67,14 +75,20 @@ function loadEquipmentNumberMapping(filePath = DEFAULT_MAPPING_PATH) {
     }
 
     const headerRow = rows[0] || [];
-    const idxPlant = findHeaderIndex(headerRow, "Planning Plant");
-    const idxDesc = findHeaderIndex(headerRow, "Description");
+    const idxPlant = findFirstHeaderIndex(headerRow, [
+        "Planning Plant",
+        "Maintenance Plant"
+    ]);
+    const idxDesc = findFirstHeaderIndex(headerRow, ["Description", "EQKTU"]);
     const idxEquip = findHeaderIndex(headerRow, "Equipment");
-    const idxFuncLoc = findHeaderIndex(headerRow, "Functional Loc.");
+    const idxFuncLoc = findFirstHeaderIndex(headerRow, [
+        "Functional Loc.",
+        "DESCRIPTION_FUNC_LOCATION"
+    ]);
 
     if (idxPlant < 0 || idxDesc < 0 || idxEquip < 0) {
         throw new Error(
-            "Kolom wajib mapping tidak lengkap: Planning Plant, Description, Equipment"
+            "Kolom wajib mapping tidak lengkap: Planning Plant / Maintenance Plant, Description / EQKTU, Equipment"
         );
     }
 
@@ -138,11 +152,14 @@ function loadEquipmentFuncLocIndex(filePath = DEFAULT_MAPPING_PATH) {
 
     const headerRow = rows[0] || [];
     const idxEquip = findHeaderIndex(headerRow, "Equipment");
-    const idxFuncLoc = findHeaderIndex(headerRow, "Functional Loc.");
+    const idxFuncLoc = findFirstHeaderIndex(headerRow, [
+        "Functional Loc.",
+        "DESCRIPTION_FUNC_LOCATION"
+    ]);
 
     if (idxEquip < 0 || idxFuncLoc < 0) {
         throw new Error(
-            "Kolom wajib mapping tidak lengkap: Equipment, Functional Loc."
+            "Kolom wajib mapping tidak lengkap: Equipment, Functional Loc. / DESCRIPTION_FUNC_LOCATION"
         );
     }
 
@@ -174,6 +191,7 @@ module.exports = {
     normalizeDescription,
     normalizeFuncLocForCompare,
     makeKey,
+    findFirstHeaderIndex,
     lookupFunctionalLoc,
     loadEquipmentNumberMapping,
     loadEquipmentFuncLocIndex

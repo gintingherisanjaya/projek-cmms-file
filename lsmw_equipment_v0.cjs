@@ -126,6 +126,13 @@ const {
     isRetryableDriveError,
     sleep
 } = require("./utils/lsmw_retry.cjs");
+const { loadEquipmentNumberMapping } = require("./utils/equipment_number_mapping.cjs");
+const {
+    lookupEquipmentNumber,
+    buildMaintenanceItemFallbackEqunr
+} = require("./utils/lsmw_maintenance_item_transform.cjs");
+const { getFuncLocSecondSegment } = require("./utils/lsmw_tasklist_transform.cjs");
+const { writeDeleteWorkbook } = require("./utils/lsmw_delete_runner.cjs");
 
 const DRIVE_RETRY = {
     maxAttempts: 6,
@@ -147,6 +154,7 @@ const INVALID_GROUP_MAPPING_DIR = path.join(
     "invalid-group-mapping"
 );
 const TEMPLATE_PATH = "./template_equipment.xlsx";
+const DELETE_TEMPLATE_PATH = "./template_delete_equipment.xlsx";
 const COLUMN_JSON_PATH = path.join(LOCAL_OUTPUT_ROOT, "column.json");
 const VALIDATION_XLSX_PATH = path.join(LOCAL_OUTPUT_ROOT, "validation.xlsx");
 const TO_DELETE_ROOT = path.join(LOCAL_OUTPUT_ROOT, "to-delete");
@@ -167,6 +175,13 @@ const usedFuncLocAfter = new Set();
 
 /** Total baris di-skip karena EQUIPMENT GROUP AFTER merah (semua file). */
 let totalRedEquipGroupSkipped = 0;
+
+/** Planning Plant + Description → Equipment (new-equipment-number.xlsx). */
+/** @type {Map<string, string> | null} */
+let equipmentByPlantDesc = null;
+
+/** EQUNR to-delete yang sudah masuk output lintas file. */
+const usedToDeleteEqunrGlobal = new Set();
 
 function wibTimestampForFilename() {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -484,6 +499,78 @@ async function writeEquipmentOutputRows(outputRowArrays, outPath) {
     await workbookTemplate.xlsx.writeFile(outPath);
 }
 
+/**
+ * @param {Array<{ primary: string, oldName: string }>} rows
+ * @param {string} outPath
+ */
+async function writeToDeleteOutputRows(rows, outPath) {
+    await writeDeleteWorkbook(rows, DELETE_TEMPLATE_PATH, outPath, {
+        oldNameLookup: true
+    });
+}
+
+/**
+ * @param {Array<{ r: Array<unknown>, rowIndex: number }>} candidates
+ * @param {{
+ *   sourceName: string,
+ *   dataStartExcelRow: number,
+ *   idxFuncLoc: number,
+ *   idxCostCenter: number | undefined,
+ *   funcLocMap: Record<string, Array<unknown>>,
+ *   funclocDescRaw: (r: Array<unknown>) => string,
+ *   funclocDescText: (r: Array<unknown>) => string
+ * }} ctx
+ * @returns {Array<{ primary: string, oldName: string }>}
+ */
+function buildToDeleteRows(candidates, ctx) {
+    const seenInFile = new Set();
+    /** @type {Array<{ primary: string, oldName: string }>} */
+    const output = [];
+
+    for (const { r, rowIndex } of candidates) {
+        const funcLocKey = normalizeFuncLocKey(r[ctx.idxFuncLoc]);
+        const effectiveCostCenter = getEffectiveCostCenter(
+            r,
+            funcLocKey,
+            ctx.funcLocMap,
+            ctx.idxCostCenter
+        );
+        if (shouldSkipLevel5Stas13Row(funcLocKey, effectiveCostCenter)) {
+            continue;
+        }
+
+        const rawDesc = ctx.funclocDescRaw(r);
+        const plant = getFuncLocSecondSegment(r[ctx.idxFuncLoc]);
+        const mappedEqunr = lookupEquipmentNumber(
+            plant,
+            rawDesc,
+            equipmentByPlantDesc
+        );
+        const equnr =
+            mappedEqunr || buildMaintenanceItemFallbackEqunr(plant, rawDesc);
+        if (!equnr) continue;
+
+        if (!mappedEqunr) {
+            console.warn(
+                `  [to-delete] EQUNR tidak ditemukan di mapping — ${ctx.sourceName} baris ${ctx.dataStartExcelRow + rowIndex}: ${rawDesc || "(kosong)"} → fallback ${equnr}`
+            );
+        }
+
+        if (seenInFile.has(equnr) || usedToDeleteEqunrGlobal.has(equnr)) {
+            continue;
+        }
+
+        seenInFile.add(equnr);
+        usedToDeleteEqunrGlobal.add(equnr);
+        output.push({
+            primary: equnr,
+            oldName: ctx.funclocDescText(r)
+        });
+    }
+
+    return output;
+}
+
 async function buildEquipmentFile(
     sourcePath,
     sourceName,
@@ -674,18 +761,11 @@ async function buildEquipmentFile(
 
     const { mod: egMod, mapping: egMapping } =
         await ensureEquipmentGroupMapping();
-    const egInputRows = [
-        ...equipmentRows.map(r => ({
-            rowIndex: rowIndexByRow.get(r),
-            funcLocNorm: normalizeFuncLocKey(r[idxFuncLoc]),
-            desc: funclocDescRaw(r)
-        })),
-        ...toDeleteCandidates.map(({ r, rowIndex }) => ({
-            rowIndex,
-            funcLocNorm: normalizeFuncLocKey(r[idxFuncLoc]),
-            desc: funclocDescRaw(r)
-        }))
-    ];
+    const egInputRows = equipmentRows.map(r => ({
+        rowIndex: rowIndexByRow.get(r),
+        funcLocNorm: normalizeFuncLocKey(r[idxFuncLoc]),
+        desc: funclocDescRaw(r)
+    }));
     const egByRowIndex = egMod.resolveEquipmentGroupAssignmentsForRows(
         egInputRows,
         egMapping
@@ -712,12 +792,6 @@ async function buildEquipmentFile(
             funcDesc: funclocDescRaw(r),
             equipmentGroupResource: equipmentGroupResourceForRow(r)
         });
-    }
-
-    function resolveEqartSoft(rowIndex) {
-        const resolved =
-            rowIndex !== undefined ? egByRowIndex.get(rowIndex) : null;
-        return resolved?.value ?? "";
     }
 
     /** BEGRU*, SWERK*, IWERK* & WERGW: satu nilai per file output. */
@@ -821,19 +895,15 @@ async function buildEquipmentFile(
         if (row) output.push(row);
     }
 
-    const toDeleteOutput = [];
-    const toDeleteDedupe = { lastCapacity: null, lastYear: null };
-
-    for (const { r, rowIndex } of toDeleteCandidates) {
-        let eqart = resolveEqartSoft(rowIndex);
-        if (isEmpty(eqart)) {
-            console.warn(
-                `  [to-delete] EQART kosong — ${sourceName} baris ${layout.dataStartExcelRow + rowIndex}: ${funclocDescRaw(r) || "(kosong)"}`
-            );
-        }
-        const row = buildEquipmentTemplateRow(r, eqart, toDeleteDedupe);
-        if (row) toDeleteOutput.push(row);
-    }
+    const toDeleteOutput = buildToDeleteRows(toDeleteCandidates, {
+        sourceName,
+        dataStartExcelRow: layout.dataStartExcelRow,
+        idxFuncLoc,
+        idxCostCenter,
+        funcLocMap,
+        funclocDescRaw,
+        funclocDescText
+    });
 
     const newName = lsmwOutputFileName(sourceName);
     const newPath = path.join(outputDir, newName);
@@ -844,7 +914,7 @@ async function buildEquipmentFile(
     if (toDeleteOutputDir && toDeleteOutput.length > 0) {
         fs.mkdirSync(toDeleteOutputDir, { recursive: true });
         toDeletePath = path.join(toDeleteOutputDir, newName);
-        await writeEquipmentOutputRows(toDeleteOutput, toDeletePath);
+        await writeToDeleteOutputRows(toDeleteOutput, toDeletePath);
         console.log(
             `  [to-delete] ${toDeleteOutput.length} baris → ${toDeletePath}`
         );
@@ -944,7 +1014,17 @@ async function main() {
     secondRowDump = [];
     columnValidationRows = [];
     usedFuncLocAfter.clear();
+    usedToDeleteEqunrGlobal.clear();
     totalRedEquipGroupSkipped = 0;
+
+    const equipmentMapping = loadEquipmentNumberMapping();
+    equipmentByPlantDesc = equipmentMapping.byPlantDesc;
+    console.log(
+        `[mapping EQUNR to-delete] ${equipmentByPlantDesc.size} key aktif` +
+            (equipmentMapping.duplicateKeys
+                ? ` (${equipmentMapping.duplicateKeys} duplikat diabaikan)`
+                : "")
+    );
 
     const cli = parseLsmwCli(process.argv.slice(2));
     outputDriveFolderId = cli.outputDriveFolderId;
@@ -1047,7 +1127,7 @@ async function main() {
                 allRows: toDeleteAllRows,
                 label: "baris to-delete",
                 writeRows: (outPath, rows) =>
-                    writeEquipmentOutputRows(rows, outPath)
+                    writeToDeleteOutputRows(rows, outPath)
             });
             console.log(
                 `to-delete: ${toDeleteAllRows.length} baris di ${path.resolve(TO_DELETE_ROOT)}`
