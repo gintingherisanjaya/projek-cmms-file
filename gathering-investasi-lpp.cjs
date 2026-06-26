@@ -41,6 +41,10 @@ const {
 const { buildColumnIndexFirstWins } = require("./utils/lsmw_lookups.cjs");
 const { normalizeHeader } = require("./utils/lsmw_cell_fill.cjs");
 const { similarity } = require("./utils/string_similarity.cjs");
+const {
+    ensureFunclocDescAliasMap,
+    applyFunclocDescAlias
+} = require("./utils/funcloc_desc_alias.cjs");
 
 const OAUTH_PATH = "oauth.json";
 const TOKEN_PATH = "token.json";
@@ -173,6 +177,7 @@ function getVal(row, idx) {
 function findInvestasiColumns(headerRow) {
     let idxNamaMesin = -1;
     let idxAlatNo = -1;
+    let idxNamaPabrik = -1;
     for (let i = 0; i < headerRow.length; i++) {
         const h = String(headerRow[i] ?? "").toUpperCase().trim();
         if (!h) continue;
@@ -205,8 +210,21 @@ function findInvestasiColumns(headerRow) {
         ) {
             if (idxAlatNo === -1) idxAlatNo = i;
         }
+
+        // Cari Nama Pabrik
+        if (
+            h === "NAMA PABRIK" ||
+            h === "PABRIK" ||
+            h === "NAMA PKS" ||
+            h === "PKS" ||
+            h.includes("NAMA PABRIK") ||
+            h.includes("PABRIK") ||
+            h.includes("NAMA PKS")
+        ) {
+            if (idxNamaPabrik === -1) idxNamaPabrik = i;
+        }
     }
-    return { idxNamaMesin, idxAlatNo };
+    return { idxNamaMesin, idxAlatNo, idxNamaPabrik };
 }
 
 /**
@@ -215,9 +233,9 @@ function findInvestasiColumns(headerRow) {
 function findInvestasiLayout(rows) {
     const limit = Math.min(rows.length, 30);
     for (let i = 0; i < limit; i++) {
-        const { idxNamaMesin, idxAlatNo } = findInvestasiColumns(rows[i]);
+        const { idxNamaMesin, idxAlatNo, idxNamaPabrik } = findInvestasiColumns(rows[i]);
         if (idxNamaMesin !== -1) {
-            return { headerRowIndex: i, idxNamaMesin, idxAlatNo };
+            return { headerRowIndex: i, idxNamaMesin, idxAlatNo, idxNamaPabrik };
         }
     }
     return null;
@@ -312,6 +330,7 @@ async function main() {
 
     try {
         await initDrive();
+        await ensureFunclocDescAliasMap();
 
         const lppFolderUrl = await promptUrl(
             "URL folder Google Drive — LPP Resource (subfolder REGIONAL*):",
@@ -428,12 +447,21 @@ async function main() {
                 const layout = findInvestasiLayout(sheet.rows);
                 if (!layout) continue;
 
-                const { idxNamaMesin, idxAlatNo, headerRowIndex } = layout;
+                const { idxNamaMesin, idxAlatNo, idxNamaPabrik, headerRowIndex } = layout;
                 const dataRows = sheet.rows.slice(headerRowIndex + 1);
 
                 for (const r of dataRows) {
                     const namaMesin = getVal(r, idxNamaMesin);
                     const alatNo = getVal(r, idxAlatNo);
+                    let namaPabrik = "";
+                    if (idxNamaPabrik !== -1) {
+                        namaPabrik = getVal(r, idxNamaPabrik);
+                    }
+
+                    // Hanya proses pabrik yang namanya diawali dengan "PKS" (case-insensitive)
+                    if (!namaPabrik.toUpperCase().startsWith("PKS")) {
+                        continue;
+                    }
 
                     if (namaMesin) {
                         const cleanNama = cleanForMatching(namaMesin);
@@ -452,6 +480,7 @@ async function main() {
                             investasiCandidates.push({
                                 namaMesin,
                                 alatNo,
+                                namaPabrik,
                                 matchKey,
                                 matched: false
                             });
@@ -467,102 +496,100 @@ async function main() {
         console.log(`\n  Menulis ${investasiCandidates.length} data Investasi unik ke investasi.xlsx...`);
         const invWb = new ExcelJS.Workbook();
         const invWs = invWb.addWorksheet("Investasi Data");
-        invWs.addRow(["Nama Mesin/Peralatan", "Mesin/Alat No."]);
+        invWs.addRow(["Nama Mesin/Peralatan", "Mesin/Alat No.", "Nama Pabrik"]);
         invWs.getRow(1).font = { bold: true };
         for (const c of investasiCandidates) {
-            invWs.addRow([c.namaMesin, c.alatNo]);
+            invWs.addRow([c.namaMesin, c.alatNo, c.namaPabrik]);
         }
-        invWs.columns = [{ width: 45 }, { width: 25 }];
+        invWs.columns = [{ width: 45 }, { width: 25 }, { width: 30 }];
         const invOutputPath = path.join(runDir, "investasi.xlsx");
         await invWb.xlsx.writeFile(invOutputPath);
         console.log(`  [OK] Berhasil menyimpan berkas intermediate Investasi: ${invOutputPath}`);
 
         // --- TAHAP 3: PENCOCOKAN & MATCH ---
         console.log("\nMemulai proses pencocokan...");
-        const matchedPairs = [];
-        const unmatchedLpp = [];
+        const matchedLppIndices = new Set();
 
-        // Lakukan pencocokan untuk setiap baris LPP
-        for (const lpp of lppRows) {
-            const lppCleanKey = cleanForMatching(lpp.eqktuBefore);
-
-            // A. Coba exact match
-            let foundCandidate = null;
-            if (lppCleanKey) {
-                foundCandidate = investasiCandidates.find(
-                    c => !c.matched && c.matchKey === lppCleanKey
-                );
+        // 1. Exact Match Pass
+        let exactMatchCount = 0;
+        for (const c of investasiCandidates) {
+            let exactMatchIdx = -1;
+            for (let i = 0; i < lppRows.length; i++) {
+                if (matchedLppIndices.has(i)) continue;
+                const lppCleanKey = cleanForMatching(lppRows[i].eqktuBefore);
+                if (lppCleanKey === c.matchKey) {
+                    exactMatchIdx = i;
+                    break;
+                }
             }
 
-            if (foundCandidate) {
-                foundCandidate.matched = true;
-                matchedPairs.push([
-                    lpp.eqktuBefore,
-                    lpp.funcloc,
-                    foundCandidate.namaMesin,
-                    foundCandidate.alatNo
-                ]);
-            } else {
-                // B. Coba similarity match (fallback)
-                let bestCandidate = null;
-                let bestScore = 0;
-
-                for (const c of investasiCandidates) {
-                    if (c.matched) continue;
-                    const score = similarity(lpp.eqktuBefore, `${c.namaMesin} ${c.alatNo}`);
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestCandidate = c;
-                    }
-                }
-
-                if (bestCandidate && bestScore >= 0.85) {
-                    bestCandidate.matched = true;
-                    matchedPairs.push([
-                        lpp.eqktuBefore,
-                        lpp.funcloc,
-                        bestCandidate.namaMesin,
-                        bestCandidate.alatNo
-                    ]);
-                } else {
-                    // Simpan sementara untuk dimasukkan di bagian akhir match.xlsx
-                    unmatchedLpp.push([
-                        lpp.eqktuBefore,
-                        lpp.funcloc,
-                        "",
-                        ""
-                    ]);
-                }
+            if (exactMatchIdx !== -1) {
+                matchedLppIndices.add(exactMatchIdx);
+                c.matched = true;
+                c.matchedLpp = lppRows[exactMatchIdx];
+                c.similarityScore = "PERFECT";
+                exactMatchCount++;
             }
         }
 
-        // C. Cari Investasi yang tidak match dengan LPP manapun
-        const unmatchedInvestasi = [];
+        // 2. Forced Similarity Match Pass (untuk Investasi yang belum punya pasangan)
+        let forcedMatchCount = 0;
         for (const c of investasiCandidates) {
-            if (!c.matched) {
-                unmatchedInvestasi.push([
+            if (c.matched) continue;
+
+            let bestLppIdx = -1;
+            let bestScore = -1;
+
+            for (let i = 0; i < lppRows.length; i++) {
+                if (matchedLppIndices.has(i)) continue;
+                const score = similarity(lppRows[i].eqktuBefore, `${c.namaMesin} ${c.alatNo}`);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestLppIdx = i;
+                }
+            }
+
+            if (bestLppIdx !== -1) {
+                matchedLppIndices.add(bestLppIdx);
+                c.matched = true;
+                c.matchedLpp = lppRows[bestLppIdx];
+                c.similarityScore = `${(bestScore * 100).toFixed(1)}%`;
+                forcedMatchCount++;
+            } else {
+                c.matched = false;
+            }
+        }
+
+        console.log(`  Hasil analisis pencocokan:`);
+        console.log(`    - Exact Match ("PERFECT"): ${exactMatchCount}`);
+        console.log(`    - Forced Similarity Match: ${forcedMatchCount}`);
+        console.log(`    - Investasi Gagal Match: ${investasiCandidates.filter(c => !c.matched).length}`);
+
+        // Gabungkan semuanya ke match.xlsx
+        const finalRows = [];
+        for (const c of investasiCandidates) {
+            if (c.matched) {
+                finalRows.push([
+                    c.matchedLpp.eqktuBefore,
+                    c.matchedLpp.funcloc,
+                    c.namaMesin,
+                    c.alatNo,
+                    c.namaPabrik,
+                    c.similarityScore,
+                    applyFunclocDescAlias(c.matchedLpp.funcloc)
+                ]);
+            } else {
+                finalRows.push([
                     "",
                     "",
                     c.namaMesin,
-                    c.alatNo
+                    c.alatNo,
+                    c.namaPabrik,
+                    "0%",
+                    ""
                 ]);
             }
         }
-
-        console.log(`  Hasil analisis:`);
-        console.log(`    - Berhasil Dicocokkan (Matched): ${matchedPairs.length}`);
-        console.log(`    - Investasi Tidak Match: ${unmatchedInvestasi.length}`);
-        console.log(`    - LPP Tidak Match: ${unmatchedLpp.length}`);
-
-        // Gabungkan semuanya ke match.xlsx dengan urutan:
-        // 1. Yang ditemukan pasangan (matchedPairs)
-        // 2. Investasi yang tidak match (unmatchedInvestasi)
-        // 3. LPP yang tidak match (unmatchedLpp)
-        const finalRows = [
-            ...matchedPairs,
-            ...unmatchedInvestasi,
-            ...unmatchedLpp
-        ];
 
         console.log(`  Menulis ${finalRows.length} baris hasil ke match.xlsx...`);
         const matchWb = new ExcelJS.Workbook();
@@ -574,7 +601,10 @@ async function main() {
             "EQKTU BEFORE",
             "FUNCTLOC DESC. AFTER LEVEL 1,2,3",
             "Nama Mesin/Peralatan",
-            "Mesin/Alat No."
+            "Mesin/Alat No.",
+            "Nama Pabrik",
+            "SIMILARITY",
+            "NAMA BARU"
         ];
 
         matchWs.addRow(headers);
@@ -588,13 +618,16 @@ async function main() {
             { width: 45 },
             { width: 45 },
             { width: 45 },
-            { width: 25 }
+            { width: 25 },
+            { width: 30 },
+            { width: 20 },
+            { width: 45 }
         ];
 
         if (finalRows.length > 0) {
             matchWs.autoFilter = {
                 from: { row: 1, column: 1 },
-                to: { row: 1 + finalRows.length, column: 4 }
+                to: { row: 1 + finalRows.length, column: 7 }
             };
         }
 
